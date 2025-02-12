@@ -287,11 +287,6 @@ files_failed=0
 # For each split diff file
 for diff_file in "$TEMP_DIR/splits"/diff-*; do
     if [ -f "$diff_file" ]; then
-        # Debug: Show raw diff content
-        info "Raw diff content for $(basename "$diff_file"):"
-        cat "$diff_file"
-        echo
-
         # Extract the file paths
         old_file=$(grep '^--- a/' "$diff_file" | sed 's|^--- a/||')
         new_file=$(grep '^+++ b/' "$diff_file" | sed 's|^+++ b/||')
