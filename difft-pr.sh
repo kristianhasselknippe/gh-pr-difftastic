@@ -131,11 +131,14 @@ check_dependencies() {
 # Function to process a single diff file
 process_diff_file() {
     local diff_file="$1"
+    local file_extension="$2"
     local in_hunk=false
     
-    # Clear previous content
-    > "$TEMP_DIR/old_content"
-    > "$TEMP_DIR/new_content"
+    # Clear and create new temporary files with correct extension
+    local old_file="$TEMP_DIR/old_content${file_extension}"
+    local new_file="$TEMP_DIR/new_content${file_extension}"
+    > "$old_file"
+    > "$new_file"
     
     # Process the diff content line by line
     while IFS= read -r line; do
@@ -147,16 +150,18 @@ process_diff_file() {
         
         if [ "$in_hunk" = true ]; then
             if [[ "$line" =~ ^\+ ]]; then
-                echo "${line:1}" >> "$TEMP_DIR/new_content"
+                echo "${line:1}" >> "$new_file"
             elif [[ "$line" =~ ^- ]]; then
-                echo "${line:1}" >> "$TEMP_DIR/old_content"
+                echo "${line:1}" >> "$old_file"
             else
                 # Context lines (no +/- prefix) go to both files
-                echo "$line" >> "$TEMP_DIR/old_content"
-                echo "$line" >> "$TEMP_DIR/new_content"
+                echo "$line" >> "$old_file"
+                echo "$line" >> "$new_file"
             fi
         fi
     done < "$diff_file"
+    
+    echo "$old_file:$new_file"
 }
 
 # Initialize variables
@@ -295,27 +300,30 @@ for diff_file in "$TEMP_DIR/splits"/diff-*; do
         if [ -n "$old_file" ] && [ -n "$new_file" ]; then
             info "Processing diff for: $new_file"
             
+            # Extract file extension
+            file_extension=""
+            if [[ "$new_file" =~ \. ]]; then
+                file_extension=".${new_file##*.}"
+            fi
+            
             # Debug: Show content of the diff file
             info "Diff chunk size: $(wc -l < "$diff_file") lines"
             
-            # Process the diff file
-            process_diff_file "$diff_file"
-            
-            # Debug: Show content sizes
-            old_size=$(wc -l < "$TEMP_DIR/old_content")
-            new_size=$(wc -l < "$TEMP_DIR/new_content")
-            info "Content sizes - Old: $old_size lines, New: $new_size lines"
+            # Process the diff file and get temp file paths
+            temp_files=$(process_diff_file "$diff_file" "$file_extension")
+            old_temp_file=${temp_files%:*}
+            new_temp_file=${temp_files#*:}
             
             # Check if both files have content
-            if [ ! -s "$TEMP_DIR/old_content" ] && [ ! -s "$TEMP_DIR/new_content" ]; then
+            if [ ! -s "$old_temp_file" ] && [ ! -s "$new_temp_file" ]; then
                 warn "No content changes found in $new_file"
                 continue
             fi
             
             echo -e "\n=== Showing diff for: $new_file ===\n"
-            
+
             # Use difftastic to show the diff
-            DIFFT_BACKGROUND="$BACKGROUND" difft "$TEMP_DIR/old_content" "$TEMP_DIR/new_content" 2>"$TEMP_DIR/difft_error.log"
+            DIFFT_BACKGROUND="$BACKGROUND" difft "$old_temp_file" "$new_temp_file" 2>"$TEMP_DIR/difft_error.log"
             difft_status=$?
             
             if [ $difft_status -eq 0 ]; then
