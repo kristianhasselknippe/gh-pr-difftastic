@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 
-set -eo pipefail
+# Just keep
+set -o pipefail
 
 VERSION="1.0.0"
 
@@ -288,8 +289,8 @@ files_failed=0
 for diff_file in "$TEMP_DIR/splits"/diff-*; do
     if [ -f "$diff_file" ]; then
         # Extract the file paths
-        old_file=$(grep '^--- a/' "$diff_file" | sed 's|^--- a/||')
-        new_file=$(grep '^+++ b/' "$diff_file" | sed 's|^+++ b/||')
+        old_file=$(grep '^--- a/' "$diff_file" | sed 's|^--- a/||') || continue
+        new_file=$(grep '^+++ b/' "$diff_file" | sed 's|^+++ b/||') || continue
         
         if [ -n "$old_file" ] && [ -n "$new_file" ]; then
             info "Processing diff for: $new_file"
@@ -314,14 +315,18 @@ for diff_file in "$TEMP_DIR/splits"/diff-*; do
             echo -e "\n=== Showing diff for: $new_file ===\n"
             
             # Use difftastic to show the diff
-            if ! DIFFT_BACKGROUND="$BACKGROUND" difft "$TEMP_DIR/old_content" "$TEMP_DIR/new_content" 2>"$TEMP_DIR/difft_error.log"; then
-                warn "Failed to process diff for $new_file"
+            DIFFT_BACKGROUND="$BACKGROUND" difft "$TEMP_DIR/old_content" "$TEMP_DIR/new_content" 2>"$TEMP_DIR/difft_error.log"
+            difft_status=$?
+            
+            if [ $difft_status -eq 0 ]; then
+                ((files_processed++))
+                echo "Processed file: $new_file"
+            else
+                warn "Failed to process diff for $new_file (exit code: $difft_status)"
                 if [ -s "$TEMP_DIR/difft_error.log" ]; then
                     warn "Difftastic error: $(cat "$TEMP_DIR/difft_error.log")"
                 fi
                 ((files_failed++))
-            else
-                ((files_processed++))
             fi
         else
             warn "Could not extract file paths from diff for file: $(basename "$diff_file")"
