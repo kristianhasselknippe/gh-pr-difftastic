@@ -1,26 +1,20 @@
 # difft-pr
 
-A command-line tool that enhances GitHub pull request reviews by displaying diffs using [Difftastic](https://difftastic.wilfred.me.uk/), a structural diff tool that understands syntax.
-
-## AI slop warning
-
-This tool was created with the help of AI.
+A command-line tool that shows GitHub Pull Request diffs using [Difftastic](https://github.com/Wilfred/difftastic), providing syntax-aware diff viewing for better code review experience.
 
 ## Features
 
-- View GitHub pull request diffs with syntax-aware highlighting
-- Works with both local repositories and remote GitHub repositories
-- Supports dark and light terminal backgrounds
-- Provides clear error messages and dependency checks
-- Works with any GitHub repository you have access to
+- Syntax-aware diff viewing using Difftastic
+- Support for both local repository and remote GitHub repositories
+- Handles file additions, deletions, and modifications
+- Configurable background color (dark/light) for better visibility
+- Detailed error reporting and status messages
 
-## Prerequisites
+## Requirements
 
 - [GitHub CLI (gh)](https://cli.github.com) - Must be installed and authenticated
-- [Difftastic (difft)](https://difftastic.wilfred.me.uk/) - For syntax-aware diff viewing
-- [coreutils](https://www.gnu.org/software/coreutils/) - For the `csplit` utility
-
-### Installation of Dependencies
+- [Difftastic (difft)](https://github.com/Wilfred/difftastic) - For syntax-aware diff viewing
+- Standard Unix utilities (included in coreutils)
 
 ## Usage
 
