@@ -128,40 +128,28 @@ check_dependencies() {
     fi
 }
 
-# Function to process a single diff file
-process_diff_file() {
-    local diff_file="$1"
-    local file_extension="$2"
-    local in_hunk=false
+# Function to fetch complete file content from GitHub
+fetch_file_content() {
+    local pr_number="$1"
+    local file_path="$2"
+    local ref="$3"  # 'base' or 'head'
+    local output_file="$4"
+    local repo_arg=""
     
-    # Clear and create new temporary files with correct extension
-    local old_file="$TEMP_DIR/old_content${file_extension}"
-    local new_file="$TEMP_DIR/new_content${file_extension}"
-    > "$old_file"
-    > "$new_file"
+    if [ -n "$REPO" ]; then
+        repo_arg="--repo $REPO"
+    fi
     
-    # Process the diff content line by line
-    while IFS= read -r line; do
-        # Skip headers until we hit the first hunk
-        if [[ "$line" =~ ^@@ ]]; then
-            in_hunk=true
-            continue
-        fi
-        
-        if [ "$in_hunk" = true ]; then
-            if [[ "$line" =~ ^\+ ]]; then
-                echo "${line:1}" >> "$new_file"
-            elif [[ "$line" =~ ^- ]]; then
-                echo "${line:1}" >> "$old_file"
-            else
-                # Context lines (no +/- prefix) go to both files
-                echo "$line" >> "$old_file"
-                echo "$line" >> "$new_file"
-            fi
-        fi
-    done < "$diff_file"
-    
-    echo "$old_file:$new_file"
+    # Get the file content from the specific ref
+    if gh pr view "$pr_number" $repo_arg --json "files,baseRefName,headRefName" --jq ".${ref}RefName" | \
+       xargs -I{} gh api "/repos/${REPO:-$(gh repo view --json nameWithOwner -q .nameWithOwner)}/contents/${file_path}?ref={}" \
+       --jq '.content' 2>/dev/null | base64 -d > "$output_file"; then
+        return 0
+    else
+        # Handle deleted/added files by creating empty file
+        touch "$output_file"
+        return 1
+    fi
 }
 
 # Initialize variables
@@ -298,30 +286,30 @@ for diff_file in "$TEMP_DIR/splits"/diff-*; do
         new_file=$(grep '^+++ b/' "$diff_file" | sed 's|^+++ b/||') || continue
         
         if [ -n "$old_file" ] && [ -n "$new_file" ]; then
-            info "Processing diff for: $new_file"
+            info "Processing changes for: $new_file"
             
-            # Extract file extension
-            file_extension=""
-            if [[ "$new_file" =~ \. ]]; then
-                file_extension=".${new_file##*.}"
-            fi
+            # Create temporary files with the correct extension
+            old_temp_file="$TEMP_DIR/old_${new_file##*/}"
+            new_temp_file="$TEMP_DIR/new_${new_file##*/}"
             
-            # Debug: Show content of the diff file
-            info "Diff chunk size: $(wc -l < "$diff_file") lines"
+            # Fetch complete files from base and head
+            info "Fetching base version..."
+            fetch_file_content "$PR_NUMBER" "$old_file" "base" "$old_temp_file"
+            base_status=$?
             
-            # Process the diff file and get temp file paths
-            temp_files=$(process_diff_file "$diff_file" "$file_extension")
-            old_temp_file=${temp_files%:*}
-            new_temp_file=${temp_files#*:}
+            info "Fetching head version..."
+            fetch_file_content "$PR_NUMBER" "$new_file" "head" "$new_temp_file"
+            head_status=$?
             
-            # Check if both files have content
-            if [ ! -s "$old_temp_file" ] && [ ! -s "$new_temp_file" ]; then
-                warn "No content changes found in $new_file"
+            # Skip if both files are empty (shouldn't happen)
+            if [ $base_status -ne 0 ] && [ $head_status -ne 0 ]; then
+                warn "Could not fetch either version of $new_file"
+                ((files_failed++))
                 continue
             fi
             
             echo -e "\n=== Showing diff for: $new_file ===\n"
-
+            
             # Use difftastic to show the diff
             DIFFT_BACKGROUND="$BACKGROUND" difft "$old_temp_file" "$new_temp_file" 2>"$TEMP_DIR/difft_error.log"
             difft_status=$?
