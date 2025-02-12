@@ -2,6 +2,10 @@
 
 A command-line tool that enhances GitHub pull request reviews by displaying diffs using [Difftastic](https://difftastic.wilfred.me.uk/), a structural diff tool that understands syntax.
 
+## AI slop warning
+
+This tool was created with the help of AI.
+
 ## Features
 
 - View GitHub pull request diffs with syntax-aware highlighting
