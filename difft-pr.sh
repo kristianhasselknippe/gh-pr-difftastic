@@ -8,6 +8,7 @@ VERSION="1.0.0"
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # Function to display error messages
@@ -24,6 +25,36 @@ warn() {
 # Function to display success messages
 success() {
     echo -e "${GREEN}$1${NC}"
+}
+
+# Function to display info messages
+info() {
+    echo -e "${BLUE}$1${NC}"
+}
+
+# Function to check if gh is authenticated
+check_gh_auth() {
+    if ! gh auth status &> /dev/null; then
+        error "Not authenticated with GitHub CLI. Please run 'gh auth login' first"
+    fi
+}
+
+# Function to validate PR exists
+validate_pr() {
+    local pr_number=$1
+    local repo=$2
+    local pr_info
+    
+    if [ -n "$repo" ]; then
+        pr_info=$(gh pr view "$pr_number" --repo "$repo" --json number,state 2>/dev/null) || \
+            error "Pull request #$pr_number not found in repository $repo"
+    else
+        pr_info=$(gh pr view "$pr_number" --json number,state 2>/dev/null) || \
+            error "Pull request #$pr_number not found in current repository"
+    fi
+    
+    local pr_state=$(echo "$pr_info" | grep -o '"state":"[^"]*"' | cut -d'"' -f4)
+    info "Found PR #$pr_number (Status: $pr_state)"
 }
 
 # Function to display help menu
@@ -83,9 +114,48 @@ check_dependencies() {
         missing_deps=1
     fi
 
+    # Check for required utilities
+    if ! command -v csplit &> /dev/null; then
+        error "csplit is not installed. Please install coreutils:
+    - On Ubuntu/Debian: sudo apt install coreutils
+    - On macOS: brew install coreutils"
+        missing_deps=1
+    fi
+
     if [ $missing_deps -eq 1 ]; then
         exit 1
     fi
+}
+
+# Function to process a single diff file
+process_diff_file() {
+    local diff_file="$1"
+    local in_hunk=false
+    
+    # Clear previous content
+    > "$TEMP_DIR/old_content"
+    > "$TEMP_DIR/new_content"
+    
+    # Process the diff content line by line
+    while IFS= read -r line; do
+        # Skip headers until we hit the first hunk
+        if [[ "$line" =~ ^@@ ]]; then
+            in_hunk=true
+            continue
+        fi
+        
+        if [ "$in_hunk" = true ]; then
+            if [[ "$line" =~ ^\+ ]]; then
+                echo "${line:1}" >> "$TEMP_DIR/new_content"
+            elif [[ "$line" =~ ^- ]]; then
+                echo "${line:1}" >> "$TEMP_DIR/old_content"
+            else
+                # Context lines (no +/- prefix) go to both files
+                echo "$line" >> "$TEMP_DIR/old_content"
+                echo "$line" >> "$TEMP_DIR/new_content"
+            fi
+        fi
+    done < "$diff_file"
 }
 
 # Initialize variables
@@ -120,7 +190,7 @@ while [[ $# -gt 0 ]]; do
                 PR_NUMBER="$1"
                 shift
             else
-                error "Invalid argument: $1"
+                error "Invalid argument: $1. Use --help for usage information."
             fi
             ;;
     esac
@@ -129,23 +199,30 @@ done
 # Check dependencies
 check_dependencies
 
+# Check GitHub CLI authentication
+check_gh_auth
+
 # Validate PR number
 if [ -z "$PR_NUMBER" ]; then
-    error "Pull request number is required"
+    error "Pull request number is required. Use --help for usage information."
 fi
 
 if ! [[ "$PR_NUMBER" =~ ^[0-9]+$ ]]; then
     error "Pull request number must be a positive integer"
 fi
 
+# Validate PR exists and get its status
+validate_pr "$PR_NUMBER" "$REPO"
+
 # Create a temporary directory with error handling
 TEMP_DIR=$(mktemp -d) || error "Failed to create temporary directory"
 trap 'rm -rf "$TEMP_DIR"' EXIT
 
+info "Fetching pull request diff..."
+
 # Get the PR diff using GitHub CLI
 if [ -n "$REPO" ]; then
     gh pr diff "$PR_NUMBER" --repo "$REPO" > "$TEMP_DIR/pr.diff" || error "Failed to fetch PR diff. Make sure:
-    - You are authenticated with GitHub CLI (run 'gh auth login')
     - The repository and PR exist
     - You have access to the repository"
 else
@@ -157,43 +234,119 @@ else
     fi
     
     gh pr diff "$PR_NUMBER" > "$TEMP_DIR/pr.diff" || error "Failed to fetch PR diff. Make sure:
-    - You are authenticated with GitHub CLI (run 'gh auth login')
     - The PR exists
     - You have access to the repository"
 fi
 
-# Check if the diff is empty
-if [ ! -s "$TEMP_DIR/pr.diff" ]; then
-    warn "The pull request diff is empty"
-    exit 0
+# Debug: Show diff content
+if [ -s "$TEMP_DIR/pr.diff" ]; then
+    info "Diff file size: $(wc -l < "$TEMP_DIR/pr.diff") lines"
+else
+    error "Received empty diff from GitHub"
 fi
 
-# Process the diff file to work with difftastic
-csplit -f "$TEMP_DIR/diff-" "$TEMP_DIR/pr.diff" '/^diff --git/' '{*}' > /dev/null || error "Failed to process diff file"
+# Check if the diff file contains actual git diff content
+if ! grep -q "^diff --git" "$TEMP_DIR/pr.diff"; then
+    error "Invalid diff format received from GitHub. The PR might not contain any changes."
+fi
+
+info "Processing diff files..."
+
+# Create a directory for split files
+mkdir -p "$TEMP_DIR/splits"
+
+# Split the diff into individual files
+awk '
+    BEGIN { file_count = 0; current_file = ""; }
+    /^diff --git/ {
+        if (current_file != "") {
+            close(current_file);
+        }
+        file_count++;
+        current_file = sprintf("'"$TEMP_DIR"'/splits/diff-%03d", file_count);
+        print > current_file;
+        next;
+    }
+    current_file != "" {
+        print >> current_file;
+    }
+' "$TEMP_DIR/pr.diff"
+
+# Debug: Show number of split files
+split_files=$(ls "$TEMP_DIR/splits"/diff-* 2>/dev/null | wc -l || echo 0)
+info "Found $split_files file(s) to process"
+
+if [ "$split_files" -eq 0 ]; then
+    error "No diff files found after processing"
+fi
 
 # Counter for number of files processed
 files_processed=0
+files_failed=0
 
 # For each split diff file
-for diff_file in "$TEMP_DIR"/diff-*; do
+for diff_file in "$TEMP_DIR/splits"/diff-*; do
     if [ -f "$diff_file" ]; then
+        # Debug: Show raw diff content
+        info "Raw diff content for $(basename "$diff_file"):"
+        cat "$diff_file"
+        echo
+
         # Extract the file paths
         old_file=$(grep '^--- a/' "$diff_file" | sed 's|^--- a/||')
         new_file=$(grep '^+++ b/' "$diff_file" | sed 's|^+++ b/||')
         
         if [ -n "$old_file" ] && [ -n "$new_file" ]; then
+            info "Processing diff for: $new_file"
+            
+            # Debug: Show content of the diff file
+            info "Diff chunk size: $(wc -l < "$diff_file") lines"
+            
+            # Process the diff file
+            process_diff_file "$diff_file"
+            
+            # Debug: Show content sizes
+            old_size=$(wc -l < "$TEMP_DIR/old_content")
+            new_size=$(wc -l < "$TEMP_DIR/new_content")
+            info "Content sizes - Old: $old_size lines, New: $new_size lines"
+            
+            # Check if both files have content
+            if [ ! -s "$TEMP_DIR/old_content" ] && [ ! -s "$TEMP_DIR/new_content" ]; then
+                warn "No content changes found in $new_file"
+                continue
+            fi
+            
             echo -e "\n=== Showing diff for: $new_file ===\n"
             
-            # Extract the content sections and create temporary files
-            awk '/^-/{p=1;next} /^diff/{p=0} p' "$diff_file" | sed 's/^-//' > "$TEMP_DIR/old_content"
-            awk '/^+/{p=1;next} /^diff/{p=0} p' "$diff_file" | sed 's/^+//' > "$TEMP_DIR/new_content"
-            
             # Use difftastic to show the diff
-            DIFFT_BACKGROUND="$BACKGROUND" difft "$TEMP_DIR/old_content" "$TEMP_DIR/new_content" || warn "Failed to process diff for $new_file"
-            
-            ((files_processed++))
+            if ! DIFFT_BACKGROUND="$BACKGROUND" difft "$TEMP_DIR/old_content" "$TEMP_DIR/new_content" 2>"$TEMP_DIR/difft_error.log"; then
+                warn "Failed to process diff for $new_file"
+                if [ -s "$TEMP_DIR/difft_error.log" ]; then
+                    warn "Difftastic error: $(cat "$TEMP_DIR/difft_error.log")"
+                fi
+                ((files_failed++))
+            else
+                ((files_processed++))
+            fi
+        else
+            warn "Could not extract file paths from diff for file: $(basename "$diff_file")"
+            warn "Diff content: $(head -n 1 "$diff_file")"
         fi
     fi
 done
 
-success "Successfully processed $files_processed file(s)" 
+if [ $files_processed -eq 0 ]; then
+    if [ $files_failed -gt 0 ]; then
+        error "Failed to process any files successfully ($files_failed files failed)"
+    else
+        warn "No files were processed. The PR might not contain any changes."
+        # Debug: Show the original diff content
+        warn "Original diff content:"
+        cat "$TEMP_DIR/pr.diff"
+    fi
+else
+    success "Successfully processed $files_processed file(s)"
+    if [ $files_failed -gt 0 ]; then
+        warn "Failed to process $files_failed file(s)"
+    fi
+fi 
