@@ -18,51 +18,12 @@ A command-line tool that enhances GitHub pull request reviews by displaying diff
 
 ### Installation of Dependencies
 
-#### GitHub CLI
-
-```bash
-# Ubuntu/Debian
-sudo apt install gh
-
-# macOS
-brew install gh
-
-# After installation, authenticate with:
-gh auth login
-```
-
-#### Difftastic
-
-```bash
-# Ubuntu/Debian
-cargo install difftastic
-
-# macOS
-brew install difftastic
-```
-
-## Installation
-
-1. Download the script:
-```bash
-curl -O https://raw.githubusercontent.com/yourusername/difft-pr/main/difft-pr.sh
-```
-
-2. Make it executable:
-```bash
-chmod +x difft-pr.sh
-```
-
-3. Optionally, move it to your PATH:
-```bash
-sudo mv difft-pr.sh /usr/local/bin/difft-pr
-```
-
 ## Usage
 
 ### Basic Usage
 
 View a pull request in the current repository:
+
 ```bash
 difft-pr 123
 ```
@@ -80,11 +41,13 @@ Options:
 ### Examples
 
 View a PR in a specific repository:
+
 ```bash
 difft-pr -r owner/repo 123
 ```
 
 Use with light terminal background:
+
 ```bash
 difft-pr -b light 123
 ```
@@ -97,11 +60,13 @@ difft-pr -b light 123
 ## Troubleshooting
 
 1. If you get "not authenticated" errors:
+
    ```bash
    gh auth login
    ```
 
 2. If diffs don't appear:
+
    - Ensure you have access to the repository
    - Check if the PR number is correct
    - Verify you're in a git repository or using the -r option
@@ -115,4 +80,5 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 
 ## License
 
-This project is licensed under the MIT License - see the LICENSE file for details. 
+This project is licensed under the MIT License - see the LICENSE file for details.
+
